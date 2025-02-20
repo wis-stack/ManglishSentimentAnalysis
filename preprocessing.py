@@ -22,6 +22,7 @@ def load_spacy_model(model_name="en_core_web_sm"):
         import spacy.cli
         spacy.cli.download(model_name)
         return spacy.load(model_name)
+    
 class MultilingualLemmatizer():
 
     def __init__(self):
@@ -144,9 +145,11 @@ class Preprocessing():
     
     def multilingualLemmatize(self,string):
         return self.lemmatizer.lemmatize_mixed_text(string)
+    def remove_punctuation_exception(self, string):
+        return re.sub(r"[^\w\s!?]", "", string)
     
-    async def translate_if_needed(self,string):
-        detected_lang = await self.translator.detect(string)
+    def translate_if_needed(self,string):
+        detected_lang = self.translator.detect(string)
         if detected_lang == 'id': 
             translated_text = self.translator.translate(string, src='id', dest='en').text
             return translated_text
@@ -156,16 +159,17 @@ class Preprocessing():
         else:
             return string
     
-    async def preprocessing_pipeline(self, text):
+    def preprocessing_pipeline(self, text):
         text = text.lower()
         text = self.separate_chinese_english(text)
         text = self.expand_slang(text)
         text = self.handle_negation(text)
         text = self.digit2word(text)
         text = self.remove_email_url(text)
+        text = self.remove_punctuation_exception(text)
         text = self.remove_whitespace(text)
         text = self.demoji_text(text)
-        text = await self.translate_if_needed(text)
+        text = self.translate_if_needed(text)
         text = self.multilingualLemmatize(text)
         text = self.stopwords_removal(text)
         tokens = self.tokenization_fun(text)
@@ -173,15 +177,3 @@ class Preprocessing():
         return tokens
 
 
-
-import asyncio
-
-def simple_tokenize(text):
-    return text.split()
-
-preprocessor = Preprocessing(simple_tokenize)
-
-test_text = "Hey there! 😊 我不会去100 places, but I’ll visit 3. Email me at test@example.com."
-
-processed_tokens = asyncio.run(preprocessor.preprocessing_pipeline(test_text))
-print(processed_tokens)
