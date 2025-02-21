@@ -11,7 +11,13 @@ class SemanticClassifier(nn.Module):
             nn.GELU(),
             nn.LayerNorm(256),
             nn.Dropout(0.3),
-            nn.Linear(256, num_classes)
+
+            nn.Linear(256, 128),
+            nn.GELU(),
+            nn.LayerNorm(128),
+            nn.Dropout(0.3),
+
+            nn.Linear(128, num_classes) 
         )
 
         for param in self.bert.encoder.layer[:-2].parameters():

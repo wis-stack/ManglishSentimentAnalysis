@@ -1,13 +1,14 @@
 import re
 import demoji
 import nltk
-import spacy
+import concurrent.futures
 import json
 import malaya
 import jieba
 from num2words import num2words
 from googletrans import Translator
 from langdetect import detect
+import langdetect
 from nltk.tokenize import word_tokenize
 
 demoji.download_codes()
@@ -40,29 +41,28 @@ class MultilingualLemmatizer():
     def segment_chinese(self, text):
         return " ".join(jieba.cut(text))
 
-    def lemmatize_mixed_text(self,text):
+    def lemmatize_mixed_text(self, text):
         words = word_tokenize(text)
-        lemmatized_words = []
-
-        for word in words:
-            try:
-                lang = detect(word)
-            except:
-                lang = "en"
-
-            if lang == "en":
-                lemmatized_words.append(self.lemmatize_english(word))
-            elif lang == "ms":
-                lemmatized_words.append(self.lemmatize_malay(word))
-            elif lang == "zh-cn" or lang == "zh-tw":
-                lemmatized_words.append(self.segment_chinese(word))
-            else:
-                lemmatized_words.append(word) 
-
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            lemmatized_words = list(executor.map(self.lemmatize_word, words))
         return " ".join(lemmatized_words)
 
+    def lemmatize_word(self, word):
+        try:
+            lang = detect(word)
+        except:
+            lang = "en"
+        
+        if lang == "en":
+            return self.lemmatize_english(word)
+        elif lang == "ms":
+            return self.lemmatize_malay(word)
+        elif lang in ["zh-cn", "zh-tw"]:
+            return self.segment_chinese(word)
+        return word
+
 class Preprocessing():
-    def __init__(self,tokenization_fun):
+    def __init__(self,additional_fun=None):
         with open("stopwords/cn_stopwords.txt", "r", encoding="utf-8") as file:
             chinese_stopwords = {line.strip() for line in file}
 
@@ -81,50 +81,32 @@ class Preprocessing():
         self.stopwords = set(english_stopwords | chinese_stopwords | manglish_stopwords | malay_stopwords)
         self.lemmatizer = MultilingualLemmatizer()
         self.translator = Translator()
-        self.tokenization_fun = tokenization_fun
+        self.additional_fun = additional_fun
 
-    def stopwords_removal(self,string):
-        words = string.split()
-        return " ".join([x for x in words if x not in self.stopwords]) 
-    
-    def digit2word(self,string):
-        def changeDigit(match):
-            matched_string = match.group(0)
-            return num2words(matched_string, lang='en').replace(" ", "_")
+    def stopwords_removal(self, string):
+        return " ".join(filter(lambda x: x not in self.stopwords, string.split()))
         
-        if any(char.isdigit() for char in string): 
-            string = re.sub(r"[0-9]+", changeDigit, string)
-
-        return string
+    def digit2word(self, string):
+        return re.sub(r"\d+", lambda x: num2words(int(x.group(0)), lang="en").replace(" ", "_"), string)
     
-    def demoji_text(self,string):
+    def demoji_text(self, string):
         emoji_dict = demoji.findall(string)
-
         if not emoji_dict:
             return string
-
-        emoji_pattern = re.compile(
-            "|".join(re.escape(emoji) for emoji in emoji_dict.keys())
+        return re.sub(
+            "|".join(map(re.escape, emoji_dict)),
+            lambda match: emoji_dict[match.group(0)].replace(" ", "_"),
+            string
         )
 
-        def replace_emoji(match):
-            emoji = match.group(0)
-            emoji_text = emoji_dict.get(emoji, emoji)
-            return emoji_text.replace(" ", "_")
+    def remove_email_url(self, string):
+        return re.sub(r"https?://\S+|\S+@\S+", "", string)
 
-        return emoji_pattern.sub(replace_emoji, string)
-    
-    def remove_email_url(self,string):
-        string = re.sub(r"http\S+", "", string)
-        string = re.sub(r"https\S+", "", string)
-        string = re.sub(r"\S+@\S+", "", string)
-
-        return string
-    
     def remove_whitespace(self,string):
         string = re.sub(r"\n(?!\n)", " ", string)
         string = re.sub(r"\n+", "\n", string)
         string = re.sub(r" +", " ", string).strip()
+        string = re.sub(r"\n+", " ", string)
 
         return string
 
@@ -145,35 +127,38 @@ class Preprocessing():
     
     def multilingualLemmatize(self,string):
         return self.lemmatizer.lemmatize_mixed_text(string)
+    
     def remove_punctuation_exception(self, string):
         return re.sub(r"[^\w\s!?]", "", string)
     
-    def translate_if_needed(self,string):
-        detected_lang = self.translator.detect(string)
-        if detected_lang == 'id': 
-            translated_text = self.translator.translate(string, src='id', dest='en').text
-            return translated_text
-        elif detected_lang == 'zh':
-            translated_text = self.translator.translate(string, src='zh', dest='en').text
-            return translated_text
-        else:
-            return string
+    async def translate_if_needed(self, string):
+        try:
+            detected_lang = detect(string)
+            if detected_lang in ['id', 'zh']:
+                translated_text = await self.translator.translate(string, src=detected_lang, dest='en')
+                return translated_text.text
+        except langdetect.lang_detect_exception.LangDetectException:
+            return string 
+        return string
     
-    def preprocessing_pipeline(self, text):
-        text = text.lower()
+    async def preprocessing_pipeline(self, text):
+        text = str(text)
+        text = self.remove_email_url(text)
         text = self.separate_chinese_english(text)
         text = self.expand_slang(text)
         text = self.handle_negation(text)
         text = self.digit2word(text)
-        text = self.remove_email_url(text)
         text = self.remove_punctuation_exception(text)
-        text = self.remove_whitespace(text)
         text = self.demoji_text(text)
-        text = self.translate_if_needed(text)
+        text = self.remove_whitespace(text)
+        text = await self.translate_if_needed(text)
         text = self.multilingualLemmatize(text)
         text = self.stopwords_removal(text)
-        tokens = self.tokenization_fun(text)
-        
-        return tokens
+
+        if self.additional_fun:
+            text = self.additional_fun(text)
+
+        return text
+
 
 
