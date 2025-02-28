@@ -6,8 +6,9 @@ import matplotlib.pyplot as plt
 import asyncio
 from model_implementation import predict
 
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
+if not hasattr(st.session_state, 'loop'):
+    st.session_state.loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(st.session_state.loop)
 
 
 async def analyze_sentiment(text):
@@ -67,7 +68,7 @@ if option == "Upload CSV":
 
         if not st.session_state.get("sentiment_processed", False):
             st.write("Processing sentiment analysis...")
-            df = loop.run_until_complete(
+            df = st.session_state.loop.run_until_complete(
                 process_dataframe(df, text_column, sentiment_col)
             )
             st.session_state.df = df
@@ -136,7 +137,7 @@ elif option == "Upload Text File":
 
         if st.button("Run"):
             st.write("Processing...")
-            result = loop.run_until_complete(
+            result = st.session_state.loop.run_until_complete(
                 analyze_sentiment(st.session_state.uploaded_text)
             )
             st.success("Processing complete!")
@@ -154,7 +155,7 @@ elif option == "Enter Text":
         if data.strip():
             st.session_state.text_input = data
             st.write("Processing...")
-            result = loop.run_until_complete(analyze_sentiment(data))
+            result = st.session_state.loop.run_until_complete(analyze_sentiment(data))
             st.success("Processing complete!")
             st.subheader("Sentiment Result")
             st.write(f"The input text's sentiment is '{result}'.")
