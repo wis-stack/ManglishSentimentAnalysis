@@ -23,59 +23,55 @@ async def process_dataframe(df, text_column, sentiment_col):
 
 st.title("Manglish Sentiment Analysis")
 
-if "df" not in st.session_state:
-    st.session_state.df = None
+if "processed_df" not in st.session_state:
+    st.session_state.processed_df = None
 
-if "uploaded_text" not in st.session_state:
-    st.session_state.uploaded_text = None
 
-if "text_input" not in st.session_state:
-    st.session_state.text_input = ""
+def reset_app():
+    for key in st.session_state.keys():
+        del st.session_state[key]
+    st.session_state.processed_df = None
 
-if "selected_option" not in st.session_state:
-    st.session_state.selected_option = None
 
 option = st.radio(
     "Select input method:", ("Upload CSV", "Upload Text File", "Enter Text")
 )
 
-if (
-    "selected_option" not in st.session_state
-    or option != st.session_state.selected_option
-):
-    st.session_state.df = None
-    st.session_state.uploaded_text = None
-    st.session_state.text_input = ""
-    st.session_state.selected_option = option
-
 if option == "Upload CSV":
-    uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
+    uploaded_file = st.file_uploader(
+        "Upload CSV File", type=["csv"], key="csv_uploader"
+    )
 
     if uploaded_file is not None:
-        st.session_state.df = pd.read_csv(uploaded_file)
-        st.session_state.sentiment_processed = False
-
-    if st.session_state.df is not None:
-        df = st.session_state.df
+        df = pd.read_csv(uploaded_file)
         st.subheader("Raw Data")
         st.dataframe(df)
 
         df_string_columns = [col for col in df.columns if df[col].dtype == "object"]
-        text_column = st.selectbox("Select column with text data", df_string_columns)
-
+        text_column = st.selectbox(
+            "Select column with text data", df_string_columns, key="csv_text_column"
+        )
         sentiment_col = f"Sentiment_{text_column.capitalize()}"
 
-        if not st.session_state.get("sentiment_processed", False):
+        if (
+            st.session_state.processed_df is None
+            or st.session_state.text_column != text_column
+        ):
             st.write("Processing sentiment analysis...")
-            df = loop.run_until_complete(
+            processed_df = loop.run_until_complete(
                 process_dataframe(df, text_column, sentiment_col)
             )
-            st.session_state.df = df
-            st.session_state.sentiment_processed = True
+            st.session_state.processed_df = processed_df
+            st.session_state.text_column = text_column
             st.success("Sentiment analysis complete!")
 
-        sentiment_counts = st.session_state.df[sentiment_col].value_counts()
+        else:
+            processed_df = st.session_state.processed_df
+            st.success("Using cached analysis!")
 
+        sentiment_counts = processed_df[sentiment_col].value_counts()
+
+        st.subheader(f"Charts for {text_column.capitalize()}")
         col1, col2 = st.columns(2)
         with col1:
             fig = px.pie(
@@ -95,13 +91,12 @@ if option == "Upload CSV":
 
         st.subheader(f"Word Cloud for {text_column.capitalize()}")
         sentiment_option = st.selectbox(
-            "Select sentiment", ["Positive", "Negative", "Neutral"]
+            "Select sentiment",
+            ["Positive", "Negative", "Neutral"],
+            key="csv_sentiment_option",
         )
-
         text_data = " ".join(
-            st.session_state.df[st.session_state.df[sentiment_col] == sentiment_option][
-                text_column
-            ]
+            processed_df[processed_df[sentiment_col] == sentiment_option][text_column]
         )
         wordcloud = WordCloud(width=800, height=400, background_color="black").generate(
             text_data
@@ -113,46 +108,48 @@ if option == "Upload CSV":
         st.pyplot(plt)
 
         csv = (
-            st.session_state.df[[text_column, sentiment_col]]
+            processed_df[[text_column, sentiment_col]]
             .to_csv(index=False)
             .encode("utf-8")
         )
         st.download_button("Download", csv, "analyzed_data.csv", "text/csv")
 
-    if st.button("Reset"):
-        st.session_state.df = None
-        st.session_state.sentiment_processed = False
-        st.rerun()
+        st.button("Reset", on_click=reset_app)
 
+    else:
+        reset_app()
 
 elif option == "Upload Text File":
-    uploaded_file = st.file_uploader("Upload TXT File", type=["txt"])
+    uploaded_file = st.file_uploader(
+        "Upload TXT File", type=["txt"], key="txt_uploader"
+    )
 
     if uploaded_file is not None:
-        st.session_state.uploaded_text = uploaded_file.read().decode("utf-8")
+        uploaded_text = uploaded_file.read().decode("utf-8")
         st.text_area(
-            "Uploaded Text:", st.session_state.uploaded_text, height=150, disabled=True
+            "Uploaded Text:",
+            uploaded_text,
+            height=150,
+            disabled=True,
+            key="txt_text_area",
         )
 
         if st.button("Run"):
             st.write("Processing...")
-            result = loop.run_until_complete(
-                analyze_sentiment(st.session_state.uploaded_text)
-            )
+            result = loop.run_until_complete(analyze_sentiment(uploaded_text))
             st.success("Processing complete!")
             st.subheader("Sentiment Result")
             st.write(f"The input file's sentiment is '{result}'.")
+            st.button("Reset", on_click=reset_app)
 
-    if st.button("Reset"):
-        st.session_state.uploaded_text = None
-        st.rerun()
+    else:
+        reset_app()
 
 elif option == "Enter Text":
-    data = st.text_area("Enter text:", value=st.session_state.get("text_input", ""))
+    data = st.text_area("Enter text:", key="text_input")
 
     if st.button("Run"):
         if data.strip():
-            st.session_state.text_input = data
             st.write("Processing...")
             result = loop.run_until_complete(analyze_sentiment(data))
             st.success("Processing complete!")
@@ -160,7 +157,7 @@ elif option == "Enter Text":
             st.write(f"The input text's sentiment is '{result}'.")
         else:
             st.warning("Please provide input before running.")
+        st.button("Reset", on_click=reset_app)
 
-    if st.button("Reset"):
-        st.session_state.text_input = ""
-        st.rerun()
+    else:
+        reset_app()
